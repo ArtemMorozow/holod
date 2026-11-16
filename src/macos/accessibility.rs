@@ -115,8 +115,8 @@ pub fn set(element: &AXUIElement, attribute: &'static str, value: &CFType) -> AX
     unsafe { element.set_attribute_value(&name, value) }
 }
 
-pub fn raise(element: &AXUIElement) -> AXError {
-    let action = CFString::from_static_str("AXRaise");
+pub fn perform_action(element: &AXUIElement, action: &'static str) -> AXError {
+    let action = CFString::from_static_str(action);
     // SAFETY: The element and action remain live throughout the call.
     unsafe { element.perform_action(&action) }
 }

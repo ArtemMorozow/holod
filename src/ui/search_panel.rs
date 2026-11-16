@@ -188,7 +188,12 @@ where
 enum Request {
     Observe(i32),
     List(u64, Option<i32>),
-    Focus(u64, String),
+    Act(u64, String, WindowAction),
+}
+
+enum WindowAction {
+    Focus,
+    Close,
 }
 
 struct WorkspaceObserver {
@@ -277,15 +282,24 @@ fn work(requests: Receiver<Request>) {
                 }
                 let result = backend.list_for_search(&history);
                 DispatchQueue::main().exec_async(move || {
-                    with_panel(|panel| panel.receive_windows(generation, result));
+                    with_panel(|panel| panel.receive_windows(generation, result, 0));
                 });
             }
-            Request::Focus(generation, id) => {
+            Request::Act(generation, id, WindowAction::Focus) => {
                 let result = backend
                     .focus_search_window(&id)
                     .map(|window| history.record(window));
                 DispatchQueue::main().exec_async(move || {
                     with_panel(|panel| panel.receive_focus(generation, result));
+                });
+            }
+            Request::Act(generation, id, WindowAction::Close) => {
+                let result = backend.close_search_window(&id);
+                DispatchQueue::main().exec_async(move || {
+                    with_panel(|panel| {
+                        let row = usize::try_from(panel.view.table.selectedRow()).unwrap_or(0);
+                        panel.receive_windows(generation, result, row);
+                    });
                 });
             }
         });
@@ -298,6 +312,7 @@ enum Status {
     Ready,
     Loading,
     Focusing,
+    Closing,
     Error(String),
 }
 
@@ -390,7 +405,7 @@ impl SearchPanel {
         };
         self.icons.borrow_mut().clear();
         self.view.search.setStringValue(&NSString::new());
-        self.refresh_rows();
+        self.refresh_rows(0);
         self.view.window.center();
         self.focus_search();
         self.view.window.invalidateShadow();
@@ -409,7 +424,12 @@ impl SearchPanel {
         self.view.window.orderOut(None);
     }
 
-    fn receive_windows(&self, generation: u64, result: Result<Vec<WindowInfo>, WindowError>) {
+    fn receive_windows(
+        &self,
+        generation: u64,
+        result: Result<Vec<WindowInfo>, WindowError>,
+        row: usize,
+    ) {
         let mut state = self.state.borrow_mut();
         if state.generation != generation {
             return;
@@ -422,10 +442,14 @@ impl SearchPanel {
             Err(error) => state.status = Status::Error(error.to_string()),
         }
         drop(state);
-        self.filter();
+        self.filter_to_row(row);
     }
 
     fn filter(&self) {
+        self.filter_to_row(0);
+    }
+
+    fn filter_to_row(&self, row: usize) {
         let query = self.view.search.currentEditor().map_or_else(
             || self.view.search.stringValue().to_string(),
             |editor| editor.string().to_string(),
@@ -433,13 +457,13 @@ impl SearchPanel {
         let mut state = self.state.borrow_mut();
         state.matches = matching_rows(&state.windows, &query);
         drop(state);
-        self.refresh_rows();
+        self.refresh_rows(row);
     }
 
-    fn refresh_rows(&self) {
+    fn refresh_rows(&self, row: usize) {
         self.view.table.reloadData();
-        if !self.state.borrow().matches.is_empty() {
-            self.select(0);
+        if let Some(last) = self.state.borrow().matches.len().checked_sub(1) {
+            self.select(row.min(last));
         }
         self.refresh_status();
     }
@@ -459,6 +483,7 @@ impl SearchPanel {
         let count = match &state.status {
             Status::Loading | Status::Error(_) => String::new(),
             Status::Focusing => "Switching…".to_owned(),
+            Status::Closing => "Closing…".to_owned(),
             Status::Ready if state.matches.len() == 1 => "1 window".to_owned(),
             Status::Ready => format!("{} windows", state.matches.len()),
         };
@@ -493,11 +518,15 @@ impl SearchPanel {
     }
 
     fn focus_selected(&self) {
+        self.act_on_selection(WindowAction::Focus);
+    }
+
+    fn act_on_selection(&self, action: WindowAction) {
         let Ok(row) = usize::try_from(self.view.table.selectedRow()) else {
             return;
         };
         let mut state = self.state.borrow_mut();
-        if matches!(state.status, Status::Focusing) {
+        if matches!(state.status, Status::Focusing | Status::Closing) {
             return;
         }
         let Some(&index) = state.matches.get(row) else {
@@ -505,10 +534,17 @@ impl SearchPanel {
         };
         let id = state.windows[index].id.clone();
         let generation = state.generation;
-        state.status = Status::Focusing;
+        state.status = match action {
+            WindowAction::Focus => Status::Focusing,
+            WindowAction::Close => Status::Closing,
+        };
         drop(state);
         self.refresh_status();
-        if self.requests.send(Request::Focus(generation, id)).is_err() {
+        if self
+            .requests
+            .send(Request::Act(generation, id, action))
+            .is_err()
+        {
             self.worker_unavailable();
         }
     }
@@ -532,6 +568,10 @@ impl SearchPanel {
             Status::Error("The window worker stopped. Restart holod.".into());
         self.refresh_status();
     }
+}
+
+pub(super) fn close_selection() {
+    with_panel(|panel| panel.act_on_selection(WindowAction::Close));
 }
 
 impl Drop for SearchPanel {

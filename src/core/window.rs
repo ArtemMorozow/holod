@@ -19,6 +19,8 @@ pub enum WindowError {
     WindowUnavailable,
     AmbiguousWindow,
     ActivationFailed,
+    CloseUnsupported,
+    CloseUnconfirmed,
     Accessibility { operation: &'static str, code: i32 },
 }
 
@@ -40,6 +42,11 @@ impl fmt::Display for WindowError {
             Self::ActivationFailed => write!(
                 output,
                 "macOS did not focus the selected window. Switch to its Space and try again."
+            ),
+            Self::CloseUnsupported => write!(output, "This window has no available close button."),
+            Self::CloseUnconfirmed => write!(
+                output,
+                "Could not confirm the window closed. Check the app for a confirmation dialog."
             ),
             Self::Accessibility { operation, code } => {
                 write!(

@@ -18,6 +18,8 @@ use crate::macos::window_history::WindowHistory;
 
 const FOCUS_WAIT: Duration = Duration::from_millis(650);
 const FOCUS_INTERVAL: Duration = Duration::from_millis(35);
+const CLOSE_WAIT: Duration = Duration::from_millis(750);
+const CLOSE_INTERVAL: Duration = Duration::from_millis(75);
 
 #[derive(Default)]
 pub struct MacWindowBackend {
@@ -45,6 +47,19 @@ impl MacWindowBackend {
             .ok_or(WindowError::WindowUnavailable)?;
         focus(target)?;
         Ok(target.element.clone())
+    }
+
+    pub fn close_search_window(&self, id: &str) -> Result<Vec<WindowInfo>, WindowError> {
+        ax::require_access()?;
+        let mut snapshot = self.snapshot.borrow_mut();
+        let windows = snapshot.as_mut().ok_or(WindowError::WindowUnavailable)?;
+        let index = windows
+            .iter()
+            .position(|window| window.info.id == id)
+            .ok_or(WindowError::WindowUnavailable)?;
+        close(&windows[index])?;
+        windows.remove(index);
+        Ok(windows.iter().map(|window| window.info.clone()).collect())
     }
 
     fn refresh(&self, history: Option<&WindowHistory>) -> Result<Vec<WindowInfo>, WindowError> {
@@ -253,7 +268,10 @@ fn focus(window: &Window) -> Result<(), WindowError> {
             .application
             .activateWithOptions(NSApplicationActivationOptions::empty());
     }
-    optional(ax::raise(&window.element), "raise window")?;
+    optional(
+        ax::perform_action(&window.element, "AXRaise"),
+        "raise window",
+    )?;
     optional(
         ax::set(&root, "AXFocusedWindow", &window.element),
         "set focused window",
@@ -300,6 +318,62 @@ fn focus(window: &Window) -> Result<(), WindowError> {
             return Err(WindowError::ActivationFailed);
         }
         thread::sleep(FOCUS_INTERVAL);
+    }
+}
+
+fn close(window: &Window) -> Result<(), WindowError> {
+    if window.application.isTerminated() {
+        return Ok(());
+    }
+    let button = match ax::read(&window.element, "AXCloseButton") {
+        Ok(value) => value
+            .downcast::<AXUIElement>()
+            .map_err(|_| WindowError::CloseUnsupported)?,
+        Err(AXError::InvalidUIElement) => return Ok(()),
+        Err(AXError::AttributeUnsupported | AXError::NotImplemented | AXError::NoValue) => {
+            return Err(WindowError::CloseUnsupported);
+        }
+        Err(error) => return ax::check(error, "read window close button"),
+    };
+    if ax::read_bool(&button, "AXEnabled") == Ok(false) {
+        return Err(WindowError::CloseUnsupported);
+    }
+
+    // An app may time out while presenting its own save dialog. Check once per interval
+    // for the window to disappear and never press the button a second time.
+    match ax::perform_action(&button, "AXPress") {
+        AXError::Success | AXError::CannotComplete | AXError::InvalidUIElement => {}
+        AXError::ActionUnsupported | AXError::NotImplemented => {
+            return Err(WindowError::CloseUnsupported);
+        }
+        error => return ax::check(error, "press window close button"),
+    }
+
+    let deadline = Instant::now() + CLOSE_WAIT;
+    let root = ax::application(window.info.pid);
+    loop {
+        if window.application.isTerminated() {
+            return Ok(());
+        }
+        let closed = match ax::windows(&root) {
+            Ok(windows) => !windows.iter().any(|element| {
+                element
+                    .downcast::<AXUIElement>()
+                    .is_ok_and(|element| element == window.element)
+            }),
+            Err(AXError::APIDisabled) => return Err(WindowError::AccessibilityDenied),
+            Err(_) => matches!(
+                ax::read(&window.element, "AXRole"),
+                Err(AXError::InvalidUIElement)
+            ),
+        };
+        if closed {
+            return Ok(());
+        }
+        if Instant::now() >= deadline {
+            return Err(WindowError::CloseUnconfirmed);
+        }
+        thread::sleep(CLOSE_INTERVAL);
     }
 }
 

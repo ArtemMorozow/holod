@@ -1,7 +1,7 @@
 use objc2::rc::Retained;
 use objc2::{MainThreadMarker, MainThreadOnly, define_class, msg_send};
 use objc2_app_kit::{
-    NSAccessibility, NSApplication, NSBackingStoreType, NSBox, NSBoxType, NSColor,
+    NSAccessibility, NSApplication, NSBackingStoreType, NSBox, NSBoxType, NSColor, NSEventType,
     NSFloatingWindowLevel, NSFocusRingType, NSFont, NSFontWeightMedium, NSGlassEffectView,
     NSGlassEffectViewStyle, NSImage, NSImageScaling, NSImageView, NSLineBreakMode, NSMenu,
     NSMenuItem, NSPanel, NSScrollView, NSTableColumn, NSTableView, NSTableViewStyle,
@@ -20,7 +20,8 @@ const LIST_BOTTOM: f64 = 50.0;
 const LIST_HEIGHT: f64 = HEIGHT - 70.0 - LIST_BOTTOM;
 const SEARCH_MARGIN: f64 = 24.0;
 
-pub const HELP: &str = "↑ ↓  Navigate      ↵  Switch      esc  Hide      ⌘Q  Quit";
+pub const HELP: &str =
+    "↑ ↓  Navigate      ↵  Switch      ⌘W  Close window      esc  Hide      ⌘Q  Quit";
 
 pub fn install_edit_menu(mtm: MainThreadMarker, app: &NSApplication) {
     let main = NSMenu::initWithTitle(mtm.alloc(), &NSString::new());
@@ -40,6 +41,14 @@ pub fn install_edit_menu(mtm: MainThreadMarker, app: &NSApplication) {
             Some(sel!(terminate:)),
             &NSString::from_str("q"),
         );
+        let close_window = NSMenuItem::initWithTitle_action_keyEquivalent(
+            mtm.alloc(),
+            &NSString::from_str("Close Selected Window"),
+            Some(sel!(closeSelectedWindow:)),
+            &NSString::from_str("w"),
+        );
+        app_menu.addItem(&close_window);
+        app_menu.addItem(&NSMenuItem::separatorItem(mtm));
         app_menu.addItem(&quit);
         app_item.setSubmenu(Some(&app_menu));
         main.addItem(&app_item);
@@ -240,7 +249,7 @@ fn rect(x: f64, y: f64, width: f64, height: f64) -> NSRect {
     NSRect::new(NSPoint::new(x, y), NSSize::new(width, height))
 }
 
-// SAFETY: This subclass only enables keyboard focus for a borderless AppKit panel.
+// SAFETY: This main-thread subclass enables focus and handles an AppKit responder action.
 define_class!(
     #[unsafe(super(NSPanel))]
     #[thread_kind = MainThreadOnly]
@@ -250,6 +259,16 @@ define_class!(
         #[unsafe(method(canBecomeKeyWindow))]
         fn can_become_key(&self) -> bool {
             true
+        }
+
+        #[unsafe(method(closeSelectedWindow:))]
+        fn close_selected_window(&self, _sender: &NSMenuItem) {
+            let repeated = NSApplication::sharedApplication(self.mtm())
+                .currentEvent()
+                .is_some_and(|event| event.r#type() == NSEventType::KeyDown && event.isARepeat());
+            if self.isKeyWindow() && !repeated {
+                super::search_panel::close_selection();
+            }
         }
     }
 );
