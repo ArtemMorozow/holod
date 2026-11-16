@@ -1,11 +1,13 @@
 use objc2::rc::Retained;
+use objc2::runtime::AnyObject;
 use objc2::{MainThreadMarker, MainThreadOnly, define_class, msg_send};
 use objc2_app_kit::{
-    NSAccessibility, NSApplication, NSBackingStoreType, NSBox, NSBoxType, NSColor, NSEventType,
-    NSFloatingWindowLevel, NSFocusRingType, NSFont, NSFontWeightMedium, NSGlassEffectView,
-    NSGlassEffectViewStyle, NSImage, NSImageScaling, NSImageView, NSLineBreakMode, NSMenu,
-    NSMenuItem, NSPanel, NSScrollView, NSTableColumn, NSTableView, NSTableViewStyle,
-    NSTextAlignment, NSTextField, NSView, NSWindowCollectionBehavior, NSWindowStyleMask,
+    NSAccessibility, NSApplication, NSAutoresizingMaskOptions, NSBackingStoreType, NSBox,
+    NSBoxType, NSColor, NSEventType, NSFloatingWindowLevel, NSFocusRingType, NSFont,
+    NSFontWeightMedium, NSGlassEffectView, NSGlassEffectViewStyle, NSImage, NSImageScaling,
+    NSImageView, NSLineBreakMode, NSMenu, NSMenuItem, NSPanel, NSScrollView, NSTableColumn,
+    NSTableView, NSTableViewStyle, NSTextAlignment, NSTextField, NSView,
+    NSWindowCollectionBehavior, NSWindowStyleMask,
 };
 use objc2_foundation::{NSPoint, NSRect, NSSize, NSString};
 
@@ -14,6 +16,7 @@ use objc2::sel;
 
 const WIDTH: f64 = 620.0;
 const HEIGHT: f64 = 516.0;
+const CORNER_RADIUS: f64 = 30.0;
 const ROW_WIDTH: f64 = 576.0;
 const ROW_HEIGHT: f64 = 36.0;
 const LIST_BOTTOM: f64 = 50.0;
@@ -107,10 +110,29 @@ impl PanelView {
 
         let content = NSView::initWithFrame(mtm.alloc(), bounds);
         let glass = NSGlassEffectView::initWithFrame(mtm.alloc(), bounds);
-        glass.setCornerRadius(30.0);
+        glass.setCornerRadius(CORNER_RADIUS);
         glass.setStyle(NSGlassEffectViewStyle::Regular);
         glass.setContentView(Some(&content));
-        window.setContentView(Some(&glass));
+        glass.setAutoresizingMask(
+            NSAutoresizingMaskOptions::ViewWidthSizable
+                | NSAutoresizingMaskOptions::ViewHeightSizable,
+        );
+
+        // Clip the window's content so the window shadow follows the glass outline.
+        let surface = NSView::initWithFrame(mtm.alloc(), bounds);
+        surface.setWantsLayer(true);
+        surface.setClipsToBounds(true);
+        // SAFETY: NSView returns a CALayer, whose setters take a CGFloat and an NSString.
+        unsafe {
+            let layer: Option<Retained<AnyObject>> = msg_send![&surface, layer];
+            if let Some(layer) = layer {
+                let curve = NSString::from_str("continuous");
+                let _: () = msg_send![&layer, setCornerCurve: &*curve];
+                let _: () = msg_send![&layer, setCornerRadius: CORNER_RADIUS];
+            }
+        }
+        surface.addSubview(&glass);
+        window.setContentView(Some(&surface));
 
         let search_icon = image_view(mtm, rect(24.0, HEIGHT - 47.0, 23.0, 23.0));
         let magnifying_glass = NSImage::imageWithSystemSymbolName_accessibilityDescription(
