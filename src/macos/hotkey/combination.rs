@@ -37,35 +37,10 @@ impl Combination {
             return None;
         }
 
-        let key_code = event.keyCode();
-        let characters = event
-            .charactersIgnoringModifiers()
-            .map_or_else(String::new, |text| text.to_string());
-        let key = match characters.as_str() {
-            " " => "Space".into(),
-            "\r" | "\u{3}" => "↵".into(),
-            "\t" | "\u{19}" => "⇥".into(),
-            "\u{1b}" => "Esc".into(),
-            "\u{7f}" | "\u{8}" => "⌫".into(),
-            "\u{f700}" => "↑".into(),
-            "\u{f701}" => "↓".into(),
-            "\u{f702}" => "←".into(),
-            "\u{f703}" => "→".into(),
-            "\u{f728}" => "⌦".into(),
-            _ => match characters.chars().next() {
-                Some(function @ '\u{f704}'..='\u{f726}') => {
-                    format!("F{}", function as u32 - 0xf703)
-                }
-                Some(key) if !key.is_control() && !('\u{f700}'..='\u{f8ff}').contains(&key) => {
-                    characters.to_uppercase()
-                }
-                _ => format!("Key {key_code}"),
-            },
-        };
-        label.push_str(&key);
+        label.push_str(&key_name(event));
         Some((
             Self {
-                key_code,
+                key_code: event.keyCode(),
                 modifiers,
             },
             label,
@@ -84,6 +59,31 @@ impl Combination {
 
     pub fn preference(self) -> isize {
         ((u32::from(self.key_code) << 16) | self.modifiers) as isize
+    }
+}
+
+pub(super) fn key_name(event: &NSEvent) -> String {
+    let characters = event
+        .charactersIgnoringModifiers()
+        .map_or_else(String::new, |text| text.to_string());
+    match characters.as_str() {
+        " " => "Space".into(),
+        "\r" | "\u{3}" => "↵".into(),
+        "\t" | "\u{19}" => "⇥".into(),
+        "\u{1b}" => "Esc".into(),
+        "\u{7f}" | "\u{8}" => "⌫".into(),
+        "\u{f700}" => "↑".into(),
+        "\u{f701}" => "↓".into(),
+        "\u{f702}" => "←".into(),
+        "\u{f703}" => "→".into(),
+        "\u{f728}" => "⌦".into(),
+        _ => match characters.chars().next() {
+            Some(function @ '\u{f704}'..='\u{f726}') => format!("F{}", function as u32 - 0xf703),
+            Some(key) if !key.is_control() && !('\u{f700}'..='\u{f8ff}').contains(&key) => {
+                characters.to_uppercase()
+            }
+            _ => format!("Key {}", event.keyCode()),
+        },
     }
 }
 

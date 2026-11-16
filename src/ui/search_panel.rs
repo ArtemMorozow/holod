@@ -66,9 +66,9 @@ pub fn run() -> Result<(), Box<dyn Error>> {
         return Err(error.into());
     }
 
-    let monitors = hotkey::register_double_option(mtm, || {
+    let monitors = hotkey::monitor_taps(mtm, |event| {
         with_panel(|panel| {
-            if panel.shortcuts.uses_double_option() {
+            if panel.shortcuts.observe_tap(event) {
                 toggle_from_hotkey();
             }
         });
@@ -187,7 +187,7 @@ fn show_accessibility_alert(mtm: MainThreadMarker, app: &NSApplication) {
     let alert = NSAlert::new(mtm);
     alert.setMessageText(&NSString::from_str("Allow holod in Accessibility"));
     alert.setInformativeText(&NSString::from_str(
-        "holod needs Accessibility to switch windows and detect the default double Option shortcut. Under Privacy & Security → Accessibility, enable holod. If it’s missing, use + to add it from Applications. Then open holod again.",
+        "holod needs Accessibility to switch windows and detect double-tap shortcuts. Under Privacy & Security → Accessibility, enable holod. If it’s missing, use + to add it from Applications. Then open holod again.",
     ));
     alert.addButtonWithTitle(&NSString::from_str("Open System Settings"));
     alert.addButtonWithTitle(&NSString::from_str("Quit"));

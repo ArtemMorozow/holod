@@ -9,14 +9,35 @@ use objc2_app_kit::{
 };
 use objc2_foundation::{NSPoint, NSRect, NSSize, NSString, NSUserDefaults};
 
-use crate::macos::hotkey::{Combination, HOTKEY_EXISTS, Registration};
+use crate::macos::hotkey::{Combination, DoubleTap, HOTKEY_EXISTS, Registration, Shortcut};
 
 const PREFERENCE: &str = "OpenSearchShortcut";
-const DOUBLE_OPTION: isize = 0;
+
+#[derive(Default)]
+struct ActiveShortcut {
+    shortcut: Shortcut,
+    _registration: Option<Registration>,
+}
+
+impl ActiveShortcut {
+    fn install(mtm: MainThreadMarker, shortcut: Shortcut, open: fn()) -> Result<Self, i32> {
+        let registration = match shortcut {
+            Shortcut::DoubleTap(_) => None,
+            Shortcut::Combination(combination) => {
+                Some(Registration::install(mtm, combination, open)?)
+            }
+        };
+        Ok(Self {
+            shortcut,
+            _registration: registration,
+        })
+    }
+}
 
 pub struct ShortcutSettings {
     defaults: Retained<NSUserDefaults>,
-    active: RefCell<Option<(Combination, Registration)>>,
+    active: RefCell<ActiveShortcut>,
+    taps: RefCell<DoubleTap>,
     editing: Cell<bool>,
     open: fn(),
 }
@@ -25,10 +46,11 @@ impl ShortcutSettings {
     pub fn new(mtm: MainThreadMarker, open: fn()) -> Self {
         let defaults = NSUserDefaults::standardUserDefaults();
         let saved =
-            Combination::from_preference(defaults.integerForKey(&NSString::from_str(PREFERENCE)));
+            Shortcut::from_preference(defaults.integerForKey(&NSString::from_str(PREFERENCE)));
         Self {
             defaults,
             active: RefCell::new(restore(mtm, saved, open)),
+            taps: RefCell::default(),
             editing: Cell::new(false),
             open,
         }
@@ -44,8 +66,11 @@ impl ShortcutSettings {
         self.editing.get()
     }
 
-    pub fn uses_double_option(&self) -> bool {
-        !self.is_editing() && self.active.borrow().is_none()
+    pub fn observe_tap(&self, event: &NSEvent) -> bool {
+        let Shortcut::DoubleTap(key) = self.active.borrow().shortcut else {
+            return false;
+        };
+        !self.is_editing() && self.taps.borrow_mut().observe(event) == Some(key)
     }
 
     pub fn edit(&self, mtm: MainThreadMarker) {
@@ -54,38 +79,28 @@ impl ShortcutSettings {
         }
         let first_launch = self.needs_setup();
         // Release the current shortcut so the recorder can receive those keys too.
-        let previous = self.active.take().map(|(combination, _)| combination);
+        let previous = self.active.take().shortcut;
+        self.taps.take();
         let mut message = None;
         loop {
-            match prompt(mtm, first_launch, message) {
-                Choice::Save(combination) => {
-                    match Registration::install(mtm, combination, self.open) {
-                        Ok(registration) => {
-                            self.defaults.setInteger_forKey(
-                                combination.preference(),
-                                &NSString::from_str(PREFERENCE),
-                            );
-                            self.active.replace(Some((combination, registration)));
-                            break;
-                        }
-                        Err(status) => {
-                            tracing::debug!(status, "Could not register the chosen shortcut");
-                            message = Some(if status == HOTKEY_EXISTS {
-                                "That shortcut is already in use. Press a different combination."
-                            } else {
-                                "macOS could not register that shortcut. Press a different combination."
-                            });
-                        }
-                    }
-                }
-                Choice::DoubleOption => {
+            let Some(shortcut) = prompt(mtm, first_launch, message) else {
+                self.active.replace(restore(mtm, previous, self.open));
+                break;
+            };
+            match ActiveShortcut::install(mtm, shortcut, self.open) {
+                Ok(active) => {
                     self.defaults
-                        .setInteger_forKey(DOUBLE_OPTION, &NSString::from_str(PREFERENCE));
+                        .setInteger_forKey(shortcut.preference(), &NSString::from_str(PREFERENCE));
+                    self.active.replace(active);
                     break;
                 }
-                Choice::Cancel => {
-                    self.active.replace(restore(mtm, previous, self.open));
-                    break;
+                Err(status) => {
+                    tracing::debug!(status, "Could not register the chosen shortcut");
+                    message = Some(if status == HOTKEY_EXISTS {
+                        "That shortcut is already in use. Press another shortcut."
+                    } else {
+                        "macOS could not register that shortcut. Press another shortcut."
+                    });
                 }
             }
         }
@@ -93,36 +108,25 @@ impl ShortcutSettings {
     }
 }
 
-fn restore(
-    mtm: MainThreadMarker,
-    saved: Option<Combination>,
-    open: fn(),
-) -> Option<(Combination, Registration)> {
-    let combination = saved?;
-    match Registration::install(mtm, combination, open) {
-        Ok(registration) => Some((combination, registration)),
+fn restore(mtm: MainThreadMarker, saved: Shortcut, open: fn()) -> ActiveShortcut {
+    match ActiveShortcut::install(mtm, saved, open) {
+        Ok(active) => active,
         Err(status) => {
             tracing::warn!(
                 status,
                 "The saved shortcut is unavailable. Using double Option."
             );
-            None
+            ActiveShortcut::default()
         }
     }
 }
 
-enum Choice {
-    Save(Combination),
-    DoubleOption,
-    Cancel,
-}
-
-fn prompt(mtm: MainThreadMarker, first_launch: bool, message: Option<&str>) -> Choice {
+fn prompt(mtm: MainThreadMarker, first_launch: bool, message: Option<&str>) -> Option<Shortcut> {
     let alert = NSAlert::new(mtm);
     alert.setAlertStyle(NSAlertStyle::Informational);
     alert.setMessageText(&NSString::from_str("Choose a shortcut for Window Search"));
     alert.setInformativeText(&NSString::from_str(message.unwrap_or(
-        "Press the keys you want to use to open Window Search. Include Command, Control, or Option.",
+        "Press a shortcut such as ⌃⌥K, or quickly tap the same key twice, such as ⌘ → ⌘.",
     )));
     let save = alert.addButtonWithTitle(&NSString::from_str("Save Shortcut"));
     save.setEnabled(false);
@@ -145,22 +149,19 @@ fn prompt(mtm: MainThreadMarker, first_launch: bool, message: Option<&str>) -> C
     NSApplication::sharedApplication(mtm).activate();
     let response = alert.runModal();
     if response == NSAlertFirstButtonReturn {
-        return recorder
-            .ivars()
-            .combination
-            .get()
-            .map_or(Choice::Cancel, Choice::Save);
+        return recorder.ivars().shortcut.get();
     }
     if (first_launch && response == NSAlertSecondButtonReturn)
         || (!first_launch && response == NSAlertThirdButtonReturn)
     {
-        return Choice::DoubleOption;
+        return Some(Shortcut::default());
     }
-    Choice::Cancel
+    None
 }
 
 struct RecorderState {
-    combination: Cell<Option<Combination>>,
+    shortcut: Cell<Option<Shortcut>>,
+    taps: RefCell<DoubleTap>,
     label: Retained<NSTextField>,
     save: Retained<NSButton>,
 }
@@ -180,15 +181,32 @@ define_class!(
 
         #[unsafe(method(performKeyEquivalent:))]
         fn perform_key_equivalent(&self, event: &NSEvent) -> bool {
-            self.record(event)
+            self.record_combination(event)
         }
 
         #[unsafe(method(keyDown:))]
         fn key_down(&self, event: &NSEvent) {
-            if !self.record(event) {
+            if self.record_combination(event) {
+                return;
+            }
+            // Keep Escape, Return, and Tab available for the dialog buttons and focus.
+            if matches!(event.keyCode(), 0x24 | 0x30 | 0x35 | 0x4c) {
+                self.ivars().taps.take();
                 // SAFETY: NSView inherits keyDown: and this is the original AppKit event.
                 unsafe { msg_send![super(self), keyDown: event] }
+            } else {
+                self.record_tap(event);
             }
+        }
+
+        #[unsafe(method(keyUp:))]
+        fn key_up(&self, event: &NSEvent) {
+            self.record_tap(event);
+        }
+
+        #[unsafe(method(flagsChanged:))]
+        fn flags_changed(&self, event: &NSEvent) {
+            self.record_tap(event);
         }
     }
 );
@@ -200,7 +218,8 @@ impl ShortcutRecorder {
         label.setFont(Some(&NSFont::systemFontOfSize(15.0)));
         label.setFrame(bounds);
         let state = RecorderState {
-            combination: Cell::new(None),
+            shortcut: Cell::new(None),
+            taps: RefCell::default(),
             label,
             save,
         };
@@ -212,28 +231,35 @@ impl ShortcutRecorder {
         recorder
     }
 
-    fn record(&self, event: &NSEvent) -> bool {
+    fn record_combination(&self, event: &NSEvent) -> bool {
         let flags = event.modifierFlags();
         let modifiers = NSEventModifierFlags::Command
             | NSEventModifierFlags::Control
             | NSEventModifierFlags::Option;
-        // Leave bare Escape, Return, and Tab available for the dialog buttons and focus.
-        if !flags.intersects(modifiers) && matches!(event.keyCode(), 0x24 | 0x30 | 0x35 | 0x4c) {
+        if !flags.intersects(modifiers) {
             return false;
         }
-        if event.isARepeat() {
-            return true;
+        self.ivars().taps.borrow_mut().observe(event);
+        if !event.isARepeat()
+            && let Some((combination, label)) = Combination::record(event)
+        {
+            self.select(Shortcut::Combination(combination), &label);
         }
+        true
+    }
 
-        let (combination, label) = match Combination::record(event) {
-            Some((combination, label)) => (Some(combination), label),
-            None => (None, "Include Command, Control, or Option.".into()),
-        };
+    fn record_tap(&self, event: &NSEvent) {
+        let key = self.ivars().taps.borrow_mut().observe(event);
+        if let Some(key) = key {
+            self.select(Shortcut::DoubleTap(key), &key.label(event));
+        }
+    }
+
+    fn select(&self, shortcut: Shortcut, label: &str) {
         self.ivars()
             .label
-            .setStringValue(&NSString::from_str(&label));
-        self.ivars().combination.set(combination);
-        self.ivars().save.setEnabled(combination.is_some());
-        true
+            .setStringValue(&NSString::from_str(label));
+        self.ivars().shortcut.set(Some(shortcut));
+        self.ivars().save.setEnabled(true);
     }
 }
