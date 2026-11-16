@@ -5,6 +5,7 @@ pub struct WindowInfo {
     pub id: String,
     pub pid: i32,
     pub app_name: String,
+    pub bundle_id: Option<String>,
     pub title: String,
 }
 

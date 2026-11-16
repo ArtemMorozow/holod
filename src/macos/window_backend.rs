@@ -138,10 +138,11 @@ fn is_user_app(app: &NSRunningApplication) -> bool {
 
 fn app_windows(app: &Retained<NSRunningApplication>) -> Result<Vec<Window>, WindowError> {
     let pid = app.processIdentifier();
+    let bundle_id = app.bundleIdentifier().map(|id| id.to_string());
     let name = app
         .localizedName()
-        .or_else(|| app.bundleIdentifier())
         .map(|name| name.to_string())
+        .or_else(|| bundle_id.clone())
         .unwrap_or_else(|| format!("PID {pid}"));
     let launch = app
         .launchDate()
@@ -215,6 +216,7 @@ fn app_windows(app: &Retained<NSRunningApplication>) -> Result<Vec<Window>, Wind
                     id: String::new(),
                     pid,
                     app_name: name.clone(),
+                    bundle_id: bundle_id.clone(),
                     title: if title.is_empty() {
                         "(Untitled)".into()
                     } else {

@@ -80,6 +80,7 @@ mod tests {
                         id: id.into(),
                         pid: 42,
                         app_name: "Code".into(),
+                        bundle_id: Some("com.microsoft.VSCode".into()),
                         title: title.into(),
                     })
                     .collect())
