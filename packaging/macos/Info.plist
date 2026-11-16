@@ -5,9 +5,9 @@
     <key>CFBundleIdentifier</key>
     <string>io.github.artemmorozow.holod</string>
     <key>CFBundleName</key>
-    <string>holod</string>
+    <string>Holod</string>
     <key>CFBundleDisplayName</key>
-    <string>holod</string>
+    <string>Holod</string>
     <key>CFBundleExecutable</key>
     <string>holod</string>
     <key>CFBundleIconFile</key>

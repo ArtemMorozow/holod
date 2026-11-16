@@ -30,7 +30,7 @@ impl fmt::Display for WindowError {
         match self {
             Self::AccessibilityDenied => write!(
                 output,
-                "Accessibility access is required. In System Settings → Privacy & Security → Accessibility, allow holod or the terminal that launched it, then retry."
+                "Accessibility access is required. In System Settings → Privacy & Security → Accessibility, allow Holod or the terminal that launched it, then retry."
             ),
             Self::WindowUnavailable => write!(
                 output,

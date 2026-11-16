@@ -31,16 +31,17 @@ pub fn install_edit_menu(mtm: MainThreadMarker, app: &NSApplication) {
     let edit = NSMenu::initWithTitle(mtm.alloc(), &NSString::from_str("Edit"));
     // SAFETY: These are standard AppKit actions sent through the responder chain.
     unsafe {
-        let app_menu = NSMenu::initWithTitle(mtm.alloc(), &NSString::from_str("holod"));
+        let name = NSString::from_str("Holod");
+        let app_menu = NSMenu::initWithTitle(mtm.alloc(), &name);
         let app_item = NSMenuItem::initWithTitle_action_keyEquivalent(
             mtm.alloc(),
-            &NSString::from_str("holod"),
+            &name,
             None,
             &NSString::new(),
         );
         let quit = NSMenuItem::initWithTitle_action_keyEquivalent(
             mtm.alloc(),
-            &NSString::from_str("Quit holod"),
+            &NSString::from_str("Quit Holod"),
             Some(sel!(terminate:)),
             &NSString::from_str("q"),
         );
@@ -96,7 +97,7 @@ impl PanelView {
     pub fn new(mtm: MainThreadMarker) -> Self {
         let bounds = rect(0.0, 0.0, WIDTH, HEIGHT);
         let window = SearchWindow::new(mtm, bounds);
-        window.setTitle(&NSString::from_str("holod"));
+        window.setTitle(&NSString::from_str("Holod"));
         window.setOpaque(false);
         window.setBackgroundColor(Some(&NSColor::clearColor()));
         window.setHasShadow(true);

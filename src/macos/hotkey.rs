@@ -81,12 +81,12 @@ pub fn monitor_taps(
         monitors: Vec::with_capacity(2),
     };
     let global = NSEvent::addGlobalMonitorForEventsMatchingMask_handler(mask, &global_block)
-        .ok_or("Could not monitor double-tap shortcuts outside holod.")?;
+        .ok_or("Could not monitor double-tap shortcuts outside Holod.")?;
     result.monitors.push(global);
     // SAFETY: The local block always returns the original event pointer while it is valid.
     let local =
         unsafe { NSEvent::addLocalMonitorForEventsMatchingMask_handler(mask, &local_block) }
-            .ok_or("Could not monitor double-tap shortcuts inside holod.")?;
+            .ok_or("Could not monitor double-tap shortcuts inside Holod.")?;
     result.monitors.push(local);
     Ok(result)
 }

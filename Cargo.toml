@@ -1,6 +1,6 @@
 [package]
 name = "holod"
-version = "0.1.4"
+version = "0.1.5"
 edition = "2024"
 publish = false
 
@@ -24,6 +24,6 @@ objc2-app-kit = { version = "0.3", default-features = false, features = [
 objc2-application-services = { version = "0.3", default-features = false, features = ["std", "libc", "HIServices", "AXError", "AXUIElement", "AXValue"] }
 objc2-core-foundation = { version = "0.3", default-features = false, features = ["std", "CFArray", "CFNumber", "CFRunLoop", "CFString", "CFCGTypes"] }
 objc2-foundation = { version = "0.3", default-features = false, features = [
-    "std", "block2", "NSArray", "NSBundle", "NSData", "NSDate", "NSDictionary", "NSIndexSet",
+    "std", "block2", "NSArray", "NSBundle", "NSData", "NSDate", "NSDictionary", "NSError", "NSIndexSet",
     "NSNotification", "NSObject", "NSOperation", "NSString", "NSURL", "NSUserDefaults",
 ] }

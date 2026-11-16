@@ -15,9 +15,9 @@ use objc2::{MainThreadMarker, MainThreadOnly, define_class, sel};
 use objc2_app_kit::{
     NSAccessibility, NSAlert, NSAlertFirstButtonReturn, NSApplication,
     NSApplicationActivationPolicy, NSControl, NSControlTextEditingDelegate, NSImage, NSMenu,
-    NSMenuItem, NSRunningApplication, NSSquareStatusItemLength, NSStatusBar, NSStatusItem,
-    NSTableColumn, NSTableView, NSTableViewDataSource, NSTableViewDelegate, NSTextFieldDelegate,
-    NSTextView, NSView, NSWorkspace, NSWorkspaceApplicationKey,
+    NSMenuItem, NSMenuItemValidation, NSRunningApplication, NSSquareStatusItemLength, NSStatusBar,
+    NSStatusItem, NSTableColumn, NSTableView, NSTableViewDataSource, NSTableViewDelegate,
+    NSTextFieldDelegate, NSTextView, NSView, NSWorkspace, NSWorkspaceApplicationKey,
     NSWorkspaceDidActivateApplicationNotification,
 };
 use objc2_application_services::{AXObserver, AXUIElement};
@@ -33,8 +33,10 @@ use crate::macos::{
     accessibility, hotkey, window_backend::MacWindowBackend, window_history::WindowHistory,
 };
 
+use super::login_item::{LoginItem, MENU_TITLE as START_AT_LOGIN};
 use super::panel_view::{HELP, PanelView, install_edit_menu, window_row};
 use super::shortcut_settings::ShortcutSettings;
+use super::updater::Updater;
 
 thread_local! {
     static PANEL: RefCell<Option<Rc<SearchPanel>>> = const { RefCell::new(None) };
@@ -42,7 +44,7 @@ thread_local! {
 
 pub fn run() -> Result<(), Box<dyn Error>> {
     if AnyClass::get(c"NSGlassEffectView").is_none() {
-        return Err("The holod search panel requires macOS 26 or later.".into());
+        return Err("The Holod search panel requires macOS 26 or later.".into());
     }
     let mtm = MainThreadMarker::new().ok_or("AppKit must run on the main thread.")?;
     let app = NSApplication::sharedApplication(mtm);
@@ -77,19 +79,25 @@ pub fn run() -> Result<(), Box<dyn Error>> {
     let (requests, rx) = mpsc::channel();
     let workspace_observer = WorkspaceObserver::install(requests.clone());
     let shortcuts = ShortcutSettings::new(mtm, toggle_from_hotkey);
-    let first_launch = shortcuts.needs_setup();
     let panel = SearchPanel::new(mtm, requests, shortcuts);
-    let status_menu = StatusMenu::install(mtm, &app, &panel.controller)?;
+    let status_menu = StatusMenu::install(mtm, &app, &panel)?;
     let worker = thread::Builder::new()
         .name("window-accessibility".into())
         .spawn(move || work(rx))?;
     panel.observe_frontmost();
     PANEL.with(|slot| slot.replace(Some(Rc::new(panel))));
 
-    if first_launch {
-        DispatchQueue::main().exec_async(|| with_panel(SearchPanel::edit_shortcut));
-    }
-    eprintln!("holod is running. Open Search Windows from the menu bar or use your shortcut.");
+    DispatchQueue::main().exec_async(|| {
+        with_panel(|panel| {
+            if panel.shortcuts.needs_setup() {
+                panel.edit_shortcut();
+            }
+            if let Some(login_item) = &panel.login_item {
+                login_item.offer();
+            }
+        });
+    });
+    eprintln!("Holod is running. Open Search Windows from the menu bar or use your shortcut.");
     app.run();
 
     drop(status_menu);
@@ -105,7 +113,7 @@ pub fn run() -> Result<(), Box<dyn Error>> {
 fn toggle_from_hotkey() {
     DispatchQueue::main().exec_async(|| {
         with_panel(|panel| {
-            if !panel.shortcuts.is_editing() {
+            if !panel.is_showing_dialog() {
                 panel.toggle();
             }
         });
@@ -115,33 +123,39 @@ fn toggle_from_hotkey() {
 struct StatusMenu {
     bar: Retained<NSStatusBar>,
     item: Retained<NSStatusItem>,
+    updater: Option<Updater>,
 }
 
 impl StatusMenu {
     fn install(
         mtm: MainThreadMarker,
         app: &NSApplication,
-        controller: &PanelController,
+        panel: &SearchPanel,
     ) -> Result<Self, &'static str> {
         let data = NSData::with_bytes(include_bytes!("../../assets/holod-status.png"));
         let icon = NSImage::initWithData(mtm.alloc(), &data)
-            .ok_or("Could not load the holod menu bar icon.")?;
+            .ok_or("Could not load the Holod menu bar icon.")?;
         icon.setSize(NSSize::new(20.0, 20.0));
         icon.setTemplate(true);
 
         let bar = NSStatusBar::systemStatusBar();
         let item = bar.statusItemWithLength(NSSquareStatusItemLength);
-        let status_menu = Self { bar, item };
+        let status_menu = Self {
+            bar,
+            item,
+            updater: Updater::load(mtm),
+        };
         let button = status_menu
             .item
             .button(mtm)
-            .ok_or("Could not create the holod menu bar button.")?;
-        let name = NSString::from_str("holod");
+            .ok_or("Could not create the Holod menu bar button.")?;
+        let name = NSString::from_str("Holod");
         button.setImage(Some(&icon));
         button.setAccessibilityLabel(Some(&name));
         button.setToolTip(Some(&name));
 
         let menu = NSMenu::initWithTitle(mtm.alloc(), &name);
+        let controller = &*panel.controller;
         let empty = NSString::new();
         // SAFETY: These selectors match the target objects and both targets outlive the menu.
         unsafe {
@@ -161,10 +175,26 @@ impl StatusMenu {
             );
             shortcut.setTarget(Some(controller));
             menu.addItem(&shortcut);
-            menu.addItem(&NSMenuItem::separatorItem(mtm));
+            if panel.login_item.is_some() {
+                let login = NSMenuItem::initWithTitle_action_keyEquivalent(
+                    mtm.alloc(),
+                    &NSString::from_str(START_AT_LOGIN),
+                    Some(sel!(startAtLogin:)),
+                    &empty,
+                );
+                login.setTarget(Some(controller));
+                menu.addItem(&login);
+            }
+        }
+        if let Some(updater) = &status_menu.updater {
+            updater.add_menu_item(mtm, &menu);
+        }
+        menu.addItem(&NSMenuItem::separatorItem(mtm));
+        // SAFETY: NSApplication implements terminate: and outlives the menu.
+        unsafe {
             let quit = NSMenuItem::initWithTitle_action_keyEquivalent(
                 mtm.alloc(),
-                &NSString::from_str("Quit holod"),
+                &NSString::from_str("Quit Holod"),
                 Some(sel!(terminate:)),
                 &empty,
             );
@@ -185,9 +215,9 @@ impl Drop for StatusMenu {
 
 fn show_accessibility_alert(mtm: MainThreadMarker, app: &NSApplication) {
     let alert = NSAlert::new(mtm);
-    alert.setMessageText(&NSString::from_str("Allow holod in Accessibility"));
+    alert.setMessageText(&NSString::from_str("Allow Holod in Accessibility"));
     alert.setInformativeText(&NSString::from_str(
-        "holod needs Accessibility to switch windows and detect double-tap shortcuts. Under Privacy & Security → Accessibility, enable holod. If it’s missing, use + to add it from Applications. Then open holod again.",
+        "Holod needs Accessibility to switch windows and detect double-tap shortcuts. Under Privacy & Security → Accessibility, enable Holod. If it’s missing, use + to add it from Applications. Then open Holod again.",
     ));
     alert.addButtonWithTitle(&NSString::from_str("Open System Settings"));
     alert.addButtonWithTitle(&NSString::from_str("Quit"));
@@ -360,6 +390,7 @@ struct SearchPanel {
     requests: Sender<Request>,
     controller: Retained<PanelController>,
     shortcuts: ShortcutSettings,
+    login_item: Option<Retained<LoginItem>>,
 }
 
 impl SearchPanel {
@@ -390,6 +421,7 @@ impl SearchPanel {
             requests,
             controller,
             shortcuts,
+            login_item: LoginItem::for_main_bundle(mtm),
         }
     }
 
@@ -414,8 +446,18 @@ impl SearchPanel {
     }
 
     fn edit_shortcut(&self) {
+        if self.is_showing_dialog() {
+            return;
+        }
         self.close();
         self.shortcuts.edit(self.controller.mtm());
+    }
+
+    fn is_showing_dialog(&self) -> bool {
+        self.shortcuts.is_editing()
+            || NSApplication::sharedApplication(self.controller.mtm())
+                .modalWindow()
+                .is_some()
     }
 
     fn observe_frontmost(&self) {
@@ -610,7 +652,7 @@ impl SearchPanel {
 
     fn worker_unavailable(&self) {
         self.state.borrow_mut().status =
-            Status::Error("The window worker stopped. Restart holod.".into());
+            Status::Error("The window worker stopped. Restart Holod.".into());
         self.refresh_status();
     }
 }
@@ -644,7 +686,7 @@ define_class!(
         fn show_search_panel(&self, _sender: &NSMenuItem) {
             DispatchQueue::main().exec_async(|| {
                 with_panel(|panel| {
-                    if !panel.shortcuts.is_editing() {
+                    if !panel.is_showing_dialog() {
                         panel.open();
                     }
                 });
@@ -654,6 +696,20 @@ define_class!(
         #[unsafe(method(changeShortcut:))]
         fn change_shortcut(&self, _sender: &NSMenuItem) {
             DispatchQueue::main().exec_async(|| with_panel(SearchPanel::edit_shortcut));
+        }
+
+        #[unsafe(method(startAtLogin:))]
+        fn start_at_login(&self, _sender: &NSMenuItem) {
+            DispatchQueue::main().exec_async(|| {
+                with_panel(|panel| {
+                    if let Some(login_item) = &panel.login_item
+                        && !panel.is_showing_dialog()
+                    {
+                        panel.close();
+                        login_item.enable();
+                    }
+                });
+            });
         }
 
         #[unsafe(method(openSelectedWindow:))]
@@ -666,6 +722,24 @@ define_class!(
 
     // SAFETY: The implementation uses NSObject's default protocol behavior.
     unsafe impl NSObjectProtocol for PanelController {}
+
+    // SAFETY: AppKit validates menu items on the main thread using this signature.
+    unsafe impl NSMenuItemValidation for PanelController {
+        #[unsafe(method(validateMenuItem:))]
+        fn validate_menu_item(&self, item: &NSMenuItem) -> bool {
+            if item.action() != Some(sel!(startAtLogin:)) {
+                true
+            } else {
+                with_panel(|panel| {
+                    panel
+                        .login_item
+                        .as_ref()
+                        .is_some_and(|login_item| login_item.update_menu_item(item))
+                        && !panel.is_showing_dialog()
+                })
+            }
+        }
+    }
 
     // SAFETY: All callbacks have the AppKit protocol signatures and run on the main thread.
     unsafe impl NSControlTextEditingDelegate for PanelController {
