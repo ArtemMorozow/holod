@@ -27,7 +27,7 @@ impl fmt::Display for WindowError {
         match self {
             Self::AccessibilityDenied => write!(
                 output,
-                "Accessibility access is required. In System Settings → Privacy & Security → Accessibility, allow the terminal or app that launched Window Switcher, then retry."
+                "Accessibility access is required. In System Settings → Privacy & Security → Accessibility, allow holod or the terminal that launched it, then retry."
             ),
             Self::WindowUnavailable => write!(
                 output,

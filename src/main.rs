@@ -1,5 +1,5 @@
 #[cfg(not(target_os = "macos"))]
-compile_error!("Window Switcher requires macOS.");
+compile_error!("holod requires macOS.");
 
 mod cli;
 mod core;
@@ -38,7 +38,7 @@ fn main() -> ExitCode {
             ExitCode::SUCCESS
         }
         Err(error) => {
-            eprintln!("window-switcher: {error}");
+            eprintln!("holod: {error}");
             ExitCode::FAILURE
         }
     }

@@ -4,15 +4,15 @@ use crate::core::window::WindowBackend;
 
 pub const HELP: &str = "\
 Usage:
-  window-switcher
-  window-switcher gui [--hotkey <shortcut>]
-  window-switcher list
-  window-switcher focus <id>
-  window-switcher --help";
+  holod
+  holod gui
+  holod list
+  holod focus <id>
+  holod --help";
 
 pub enum Command<'a> {
     Help,
-    Gui(Option<&'a str>),
+    Gui,
     List,
     Focus(&'a str),
 }
@@ -20,12 +20,9 @@ pub enum Command<'a> {
 impl<'a> Command<'a> {
     pub fn parse(args: &'a [String]) -> Result<Self, String> {
         match args {
-            [] => Ok(Self::Gui(None)),
+            [] => Ok(Self::Gui),
             [arg] if arg == "-h" || arg == "--help" => Ok(Self::Help),
-            [command] if command == "gui" => Ok(Self::Gui(None)),
-            [command, option, shortcut] if command == "gui" && option == "--hotkey" => {
-                Ok(Self::Gui(Some(shortcut)))
-            }
+            [command] if command == "gui" => Ok(Self::Gui),
             [command] if command == "list" => Ok(Self::List),
             [command, id] if command == "focus" => Ok(Self::Focus(id)),
             _ => Err(format!("Invalid arguments.\n\n{HELP}")),
@@ -37,8 +34,8 @@ pub fn run(
     command: Command<'_>,
     backend: &impl WindowBackend,
 ) -> Result<(), Box<dyn std::error::Error>> {
-    if let Command::Gui(shortcut) = command {
-        return crate::ui::search_panel::run(shortcut);
+    if let Command::Gui = command {
+        return crate::ui::search_panel::run();
     }
     run_with_output(command, backend, &mut io::stdout().lock())
 }
@@ -50,7 +47,7 @@ fn run_with_output(
 ) -> Result<(), Box<dyn std::error::Error>> {
     match command {
         Command::Help => writeln!(output, "{HELP}")?,
-        Command::Gui(_) => unreachable!("GUI command handled before locking stdout"),
+        Command::Gui => unreachable!("GUI command handled before locking stdout"),
         Command::List => {
             for window in backend.list_windows()? {
                 let app = window.app_name.replace(['\t', '\n', '\r'], " ");
