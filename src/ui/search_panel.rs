@@ -34,6 +34,7 @@ use crate::macos::{
 };
 
 use super::panel_view::{HELP, PanelView, install_edit_menu, window_row};
+use super::shortcut_settings::ShortcutSettings;
 
 thread_local! {
     static PANEL: RefCell<Option<Rc<SearchPanel>>> = const { RefCell::new(None) };
@@ -65,13 +66,19 @@ pub fn run() -> Result<(), Box<dyn Error>> {
         return Err(error.into());
     }
 
-    let monitors = hotkey::register(mtm, || {
-        DispatchQueue::main().exec_async(|| with_panel(SearchPanel::toggle));
+    let monitors = hotkey::register_double_option(mtm, || {
+        with_panel(|panel| {
+            if panel.shortcuts.uses_double_option() {
+                toggle_from_hotkey();
+            }
+        });
     })?;
     install_edit_menu(mtm, &app);
     let (requests, rx) = mpsc::channel();
     let workspace_observer = WorkspaceObserver::install(requests.clone());
-    let panel = SearchPanel::new(mtm, requests);
+    let shortcuts = ShortcutSettings::new(mtm, toggle_from_hotkey);
+    let first_launch = shortcuts.needs_setup();
+    let panel = SearchPanel::new(mtm, requests, shortcuts);
     let status_menu = StatusMenu::install(mtm, &app, &panel.controller)?;
     let worker = thread::Builder::new()
         .name("window-accessibility".into())
@@ -79,7 +86,10 @@ pub fn run() -> Result<(), Box<dyn Error>> {
     panel.observe_frontmost();
     PANEL.with(|slot| slot.replace(Some(Rc::new(panel))));
 
-    eprintln!("holod is running. Tap Option twice to search.");
+    if first_launch {
+        DispatchQueue::main().exec_async(|| with_panel(SearchPanel::edit_shortcut));
+    }
+    eprintln!("holod is running. Open Search Windows from the menu bar or use your shortcut.");
     app.run();
 
     drop(status_menu);
@@ -90,6 +100,16 @@ pub fn run() -> Result<(), Box<dyn Error>> {
         tracing::error!("Window worker exited unexpectedly");
     }
     Ok(())
+}
+
+fn toggle_from_hotkey() {
+    DispatchQueue::main().exec_async(|| {
+        with_panel(|panel| {
+            if !panel.shortcuts.is_editing() {
+                panel.toggle();
+            }
+        });
+    });
 }
 
 struct StatusMenu {
@@ -133,6 +153,14 @@ impl StatusMenu {
             );
             search.setTarget(Some(controller));
             menu.addItem(&search);
+            let shortcut = NSMenuItem::initWithTitle_action_keyEquivalent(
+                mtm.alloc(),
+                &NSString::from_str("Change Shortcut…"),
+                Some(sel!(changeShortcut:)),
+                &empty,
+            );
+            shortcut.setTarget(Some(controller));
+            menu.addItem(&shortcut);
             menu.addItem(&NSMenuItem::separatorItem(mtm));
             let quit = NSMenuItem::initWithTitle_action_keyEquivalent(
                 mtm.alloc(),
@@ -159,7 +187,7 @@ fn show_accessibility_alert(mtm: MainThreadMarker, app: &NSApplication) {
     let alert = NSAlert::new(mtm);
     alert.setMessageText(&NSString::from_str("Allow holod in Accessibility"));
     alert.setInformativeText(&NSString::from_str(
-        "holod needs Accessibility to switch windows and detect two Option taps. Under Privacy & Security → Accessibility, enable holod. If it’s missing, use + to add it from Applications. Then open holod again.",
+        "holod needs Accessibility to switch windows and detect the default double Option shortcut. Under Privacy & Security → Accessibility, enable holod. If it’s missing, use + to add it from Applications. Then open holod again.",
     ));
     alert.addButtonWithTitle(&NSString::from_str("Open System Settings"));
     alert.addButtonWithTitle(&NSString::from_str("Quit"));
@@ -331,10 +359,11 @@ struct SearchPanel {
     generic_icon: Option<Retained<NSImage>>,
     requests: Sender<Request>,
     controller: Retained<PanelController>,
+    shortcuts: ShortcutSettings,
 }
 
 impl SearchPanel {
-    fn new(mtm: MainThreadMarker, requests: Sender<Request>) -> Self {
+    fn new(mtm: MainThreadMarker, requests: Sender<Request>, shortcuts: ShortcutSettings) -> Self {
         let view = PanelView::new(mtm);
         let controller = PanelController::new(mtm);
         // SAFETY: SearchPanel owns the controller and clears the delegates and target on drop.
@@ -360,6 +389,7 @@ impl SearchPanel {
             generic_icon,
             requests,
             controller,
+            shortcuts,
         }
     }
 
@@ -381,6 +411,11 @@ impl SearchPanel {
         } else {
             self.open();
         }
+    }
+
+    fn edit_shortcut(&self) {
+        self.close();
+        self.shortcuts.edit(self.controller.mtm());
     }
 
     fn observe_frontmost(&self) {
@@ -607,7 +642,18 @@ define_class!(
     impl PanelController {
         #[unsafe(method(showSearchPanel:))]
         fn show_search_panel(&self, _sender: &NSMenuItem) {
-            DispatchQueue::main().exec_async(|| with_panel(SearchPanel::open));
+            DispatchQueue::main().exec_async(|| {
+                with_panel(|panel| {
+                    if !panel.shortcuts.is_editing() {
+                        panel.open();
+                    }
+                });
+            });
+        }
+
+        #[unsafe(method(changeShortcut:))]
+        fn change_shortcut(&self, _sender: &NSMenuItem) {
+            DispatchQueue::main().exec_async(|| with_panel(SearchPanel::edit_shortcut));
         }
 
         #[unsafe(method(openSelectedWindow:))]

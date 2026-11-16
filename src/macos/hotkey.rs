@@ -9,6 +9,10 @@ use objc2::rc::Retained;
 use objc2::runtime::AnyObject;
 use objc2_app_kit::{NSEvent, NSEventMask, NSEventModifierFlags, NSEventType};
 
+mod combination;
+
+pub use combination::{Combination, HOTKEY_EXISTS, Registration};
+
 const LEFT_OPTION: u16 = 0x3a; // kVK_Option
 const RIGHT_OPTION: u16 = 0x3d; // kVK_RightOption
 const MAX_TAP: f64 = 0.24;
@@ -19,7 +23,7 @@ pub struct OptionMonitors {
     monitors: Vec<Retained<AnyObject>>,
 }
 
-pub fn register(
+pub fn register_double_option(
     mtm: MainThreadMarker,
     open_panel: impl Fn() + 'static,
 ) -> Result<OptionMonitors, Box<dyn Error>> {

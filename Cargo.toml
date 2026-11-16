@@ -25,5 +25,5 @@ objc2-application-services = { version = "0.3", default-features = false, featur
 objc2-core-foundation = { version = "0.3", default-features = false, features = ["std", "CFArray", "CFNumber", "CFRunLoop", "CFString", "CFCGTypes"] }
 objc2-foundation = { version = "0.3", default-features = false, features = [
     "std", "block2", "NSArray", "NSBundle", "NSData", "NSDate", "NSDictionary", "NSIndexSet",
-    "NSNotification", "NSObject", "NSOperation", "NSString", "NSURL",
+    "NSNotification", "NSObject", "NSOperation", "NSString", "NSURL", "NSUserDefaults",
 ] }
