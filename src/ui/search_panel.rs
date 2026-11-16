@@ -534,18 +534,27 @@ impl SearchPanel {
         };
         let id = state.windows[index].id.clone();
         let generation = state.generation;
+        let switching = matches!(action, WindowAction::Focus);
         state.status = match action {
             WindowAction::Focus => Status::Focusing,
             WindowAction::Close => Status::Closing,
         };
         drop(state);
-        self.refresh_status();
+        if switching {
+            // Release the key window before asking another window to take focus.
+            self.view.window.orderOut(None);
+        } else {
+            self.refresh_status();
+        }
         if self
             .requests
             .send(Request::Act(generation, id, action))
             .is_err()
         {
             self.worker_unavailable();
+            if switching {
+                self.focus_search();
+            }
         }
     }
 
@@ -559,6 +568,7 @@ impl SearchPanel {
                 tracing::debug!(%error, "Could not switch windows");
                 self.state.borrow_mut().status = Status::Error(error.to_string());
                 self.refresh_status();
+                self.focus_search();
             }
         }
     }

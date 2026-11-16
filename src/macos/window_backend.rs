@@ -263,7 +263,9 @@ fn focus(window: &Window) -> Result<(), WindowError> {
         ax::set(&window.element, "AXMain", CFBoolean::new(true)),
         "make window main",
     )?;
-    if ax::set(&root, "AXFrontmost", CFBoolean::new(true)) != AXError::Success {
+    if !is_frontmost(window.info.pid)
+        && ax::set(&root, "AXFrontmost", CFBoolean::new(true)) != AXError::Success
+    {
         window
             .application
             .activateWithOptions(NSApplicationActivationOptions::empty());
@@ -298,18 +300,21 @@ fn focus(window: &Window) -> Result<(), WindowError> {
             })
             .and_then(|app| ax::pid(&app));
         let application_active = match active_pid {
-            Ok(pid) => pid == window.info.pid,
+            Ok(pid) if pid != std::process::id() as i32 => pid == window.info.pid,
+            Ok(_) => is_frontmost(window.info.pid),
             Err(error) => {
                 tracing::debug!(code = error.0, "System-wide AX focus unavailable");
-                NSWorkspace::sharedWorkspace()
-                    .frontmostApplication()
-                    .is_some_and(|app| app.processIdentifier() == window.info.pid)
+                is_frontmost(window.info.pid)
             }
         };
         if focused && application_active {
             return Ok(());
         }
         if Instant::now() >= deadline {
+            // Some apps update the focused content before their focused-window attribute.
+            if application_active && focus_is_inside(&root, &window.element) {
+                return Ok(());
+            }
             tracing::debug!(
                 focused,
                 application_active,
@@ -319,6 +324,26 @@ fn focus(window: &Window) -> Result<(), WindowError> {
         }
         thread::sleep(FOCUS_INTERVAL);
     }
+}
+
+fn focus_is_inside(app: &AXUIElement, window: &AXUIElement) -> bool {
+    let Some(element) = ax::read(app, "AXFocusedUIElement")
+        .ok()
+        .and_then(|value| value.downcast::<AXUIElement>().ok())
+    else {
+        return false;
+    };
+    &*element == window
+        || ax::read(&element, "AXWindow")
+            .ok()
+            .and_then(|value| value.downcast::<AXUIElement>().ok())
+            .is_some_and(|owner| &*owner == window)
+}
+
+fn is_frontmost(pid: i32) -> bool {
+    NSWorkspace::sharedWorkspace()
+        .frontmostApplication()
+        .is_some_and(|app| app.processIdentifier() == pid)
 }
 
 fn close(window: &Window) -> Result<(), WindowError> {
@@ -379,14 +404,15 @@ fn close(window: &Window) -> Result<(), WindowError> {
 
 fn optional(result: AXError, operation: &'static str) -> Result<(), WindowError> {
     match result {
-        AXError::AttributeUnsupported | AXError::ActionUnsupported | AXError::NotImplemented => {
+        AXError::Success => Ok(()),
+        AXError::APIDisabled | AXError::InvalidUIElement => ax::check(result, operation),
+        _ => {
             tracing::debug!(
                 operation,
                 code = result.0,
-                "Optional AX operation unavailable"
+                "Optional AX operation did not complete"
             );
             Ok(())
         }
-        _ => ax::check(result, operation),
     }
 }
