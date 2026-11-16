@@ -13,9 +13,11 @@ use crate::core::window::WindowInfo;
 use objc2::sel;
 
 const WIDTH: f64 = 620.0;
-const HEIGHT: f64 = 392.0;
+const HEIGHT: f64 = 516.0;
 const ROW_WIDTH: f64 = 576.0;
-const ROW_HEIGHT: f64 = 48.0;
+const ROW_HEIGHT: f64 = 36.0;
+const LIST_BOTTOM: f64 = 50.0;
+const LIST_HEIGHT: f64 = HEIGHT - 70.0 - LIST_BOTTOM;
 const SEARCH_MARGIN: f64 = 24.0;
 
 pub const HELP: &str = "↑ ↓  Navigate      ↵  Switch      esc  Hide      ⌘Q  Quit";
@@ -101,7 +103,7 @@ impl PanelView {
         glass.setContentView(Some(&content));
         window.setContentView(Some(&glass));
 
-        let search_icon = image_view(mtm, rect(24.0, 345.0, 23.0, 23.0));
+        let search_icon = image_view(mtm, rect(24.0, HEIGHT - 47.0, 23.0, 23.0));
         let magnifying_glass = NSImage::imageWithSystemSymbolName_accessibilityDescription(
             &NSString::from_str("magnifyingglass"),
             None,
@@ -111,7 +113,12 @@ impl PanelView {
         content.addSubview(&search_icon);
 
         let search = NSTextField::textFieldWithString(&NSString::new(), mtm);
-        search.setFrame(rect(58.0, 337.0, WIDTH - 58.0 - SEARCH_MARGIN, 38.0));
+        search.setFrame(rect(
+            58.0,
+            HEIGHT - 55.0,
+            WIDTH - 58.0 - SEARCH_MARGIN,
+            38.0,
+        ));
         search.setFont(Some(&NSFont::systemFontOfSize(24.0)));
         search.setBordered(false);
         search.setBezeled(false);
@@ -122,9 +129,9 @@ impl PanelView {
         search.setAccessibilityLabel(Some(&search_label));
         content.addSubview(&search);
         window.setInitialFirstResponder(Some(&search));
-        add_separator(mtm, &content, 325.0);
+        add_separator(mtm, &content, HEIGHT - 67.0);
 
-        let scroll_frame = rect(12.0, 50.0, WIDTH - 24.0, 272.0);
+        let scroll_frame = rect(12.0, LIST_BOTTOM, WIDTH - 24.0, LIST_HEIGHT);
         let scroll = NSScrollView::initWithFrame(mtm.alloc(), scroll_frame);
         scroll.setHasVerticalScroller(true);
         scroll.setAutohidesScrollers(true);
@@ -137,7 +144,7 @@ impl PanelView {
         table.setStyle(NSTableViewStyle::Inset);
         table.setBackgroundColor(&NSColor::clearColor());
         table.setRowHeight(ROW_HEIGHT);
-        table.setIntercellSpacing(NSSize::new(0.0, 4.0));
+        table.setIntercellSpacing(NSSize::new(0.0, 2.0));
         table.setRefusesFirstResponder(true);
         table.setAllowsMultipleSelection(false);
         let column = NSTableColumn::initWithIdentifier(mtm.alloc(), &NSString::from_str("window"));
@@ -146,7 +153,16 @@ impl PanelView {
         scroll.setDocumentView(Some(&table));
         content.addSubview(&scroll);
 
-        let message = secondary_label(mtm, rect(44.0, 144.0, WIDTH - 88.0, 76.0), 14.0);
+        let message = secondary_label(
+            mtm,
+            rect(
+                44.0,
+                LIST_BOTTOM + (LIST_HEIGHT - 76.0) / 2.0,
+                WIDTH - 88.0,
+                76.0,
+            ),
+            14.0,
+        );
         message.setAlignment(NSTextAlignment::Center);
         message.setMaximumNumberOfLines(3);
         message.setLineBreakMode(NSLineBreakMode::ByWordWrapping);
@@ -181,19 +197,19 @@ pub fn window_row(
     icon: Option<&NSImage>,
 ) -> Retained<NSView> {
     let row = NSView::initWithFrame(mtm.alloc(), rect(0.0, 0.0, ROW_WIDTH, ROW_HEIGHT));
-    let image_view = image_view(mtm, rect(12.0, 8.0, 32.0, 32.0));
+    let image_view = image_view(mtm, rect(12.0, 6.0, 24.0, 24.0));
     image_view.setImage(icon);
     row.addSubview(&image_view);
 
     let title = NSTextField::labelWithString(&NSString::from_str(&window.title), mtm);
-    title.setFrame(rect(56.0, 24.0, ROW_WIDTH - 76.0, 19.0));
+    title.setFrame(rect(46.0, 17.0, ROW_WIDTH - 64.0, 16.0));
     // SAFETY: NSFontWeightMedium is an immutable AppKit constant.
     let medium = unsafe { NSFontWeightMedium };
-    title.setFont(Some(&NSFont::systemFontOfSize_weight(15.0, medium)));
+    title.setFont(Some(&NSFont::systemFontOfSize_weight(13.0, medium)));
     title.setLineBreakMode(NSLineBreakMode::ByTruncatingTail);
     row.addSubview(&title);
 
-    let app = secondary_label(mtm, rect(56.0, 5.0, ROW_WIDTH - 76.0, 16.0), 12.0);
+    let app = secondary_label(mtm, rect(46.0, 3.0, ROW_WIDTH - 64.0, 13.0), 11.0);
     app.setStringValue(&NSString::from_str(&window.app_name));
     app.setLineBreakMode(NSLineBreakMode::ByTruncatingTail);
     row.addSubview(&app);

@@ -14,6 +14,7 @@ use objc2_core_foundation::{CFBoolean, CFRetained, CFString};
 
 use crate::core::window::{WindowBackend, WindowError, WindowInfo};
 use crate::macos::accessibility as ax;
+use crate::macos::window_history::WindowHistory;
 
 const FOCUS_WAIT: Duration = Duration::from_millis(650);
 const FOCUS_INTERVAL: Duration = Duration::from_millis(35);
@@ -30,8 +31,23 @@ struct Window {
     application: Retained<NSRunningApplication>,
 }
 
-impl WindowBackend for MacWindowBackend {
-    fn list_windows(&self) -> Result<Vec<WindowInfo>, WindowError> {
+impl MacWindowBackend {
+    pub fn list_for_search(&self, history: &WindowHistory) -> Result<Vec<WindowInfo>, WindowError> {
+        self.refresh(Some(history))
+    }
+
+    pub fn focus_search_window(&self, id: &str) -> Result<CFRetained<AXUIElement>, WindowError> {
+        ax::require_access()?;
+        let snapshot = self.snapshot.borrow();
+        let target = snapshot
+            .as_ref()
+            .and_then(|windows| windows.iter().find(|window| window.info.id == id))
+            .ok_or(WindowError::WindowUnavailable)?;
+        focus(target)?;
+        Ok(target.element.clone())
+    }
+
+    fn refresh(&self, history: Option<&WindowHistory>) -> Result<Vec<WindowInfo>, WindowError> {
         self.snapshot.replace(None);
         ax::require_access()?;
         ax::configure_timeout()?;
@@ -56,6 +72,7 @@ impl WindowBackend for MacWindowBackend {
         }
         windows.sort_by_cached_key(|window| {
             (
+                history.map(|history| history.sort_key(&window.element)),
                 window.info.app_name.to_lowercase(),
                 window.info.title.to_lowercase(),
                 window.info.id.clone(),
@@ -65,13 +82,18 @@ impl WindowBackend for MacWindowBackend {
         self.snapshot.replace(Some(windows));
         Ok(info)
     }
+}
+
+impl WindowBackend for MacWindowBackend {
+    fn list_windows(&self) -> Result<Vec<WindowInfo>, WindowError> {
+        self.refresh(None)
+    }
 
     fn focus_window(&self, id: &str) -> Result<(), WindowError> {
-        ax::require_access()?;
-        if let Some(windows) = self.snapshot.borrow().as_ref() {
-            let target = windows.iter().find(|window| window.info.id == id);
-            return focus(target.ok_or(WindowError::WindowUnavailable)?);
+        if self.snapshot.borrow().is_some() {
+            return self.focus_search_window(id).map(|_| ());
         }
+        ax::require_access()?;
 
         let (pid, key) = id.split_once(':').ok_or(WindowError::WindowUnavailable)?;
         let pid = pid

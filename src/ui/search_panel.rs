@@ -1,10 +1,13 @@
 use std::cell::RefCell;
 use std::collections::HashMap;
 use std::error::Error;
+use std::ffi::c_void;
+use std::ptr::NonNull;
 use std::rc::Rc;
 use std::sync::mpsc::{self, Receiver, Sender};
 use std::thread;
 
+use block2::RcBlock;
 use dispatch2::DispatchQueue;
 use objc2::rc::{Retained, autoreleasepool};
 use objc2::runtime::{AnyClass, ProtocolObject, Sel};
@@ -14,16 +17,21 @@ use objc2_app_kit::{
     NSApplicationActivationPolicy, NSControl, NSControlTextEditingDelegate, NSImage, NSMenu,
     NSMenuItem, NSRunningApplication, NSSquareStatusItemLength, NSStatusBar, NSStatusItem,
     NSTableColumn, NSTableView, NSTableViewDataSource, NSTableViewDelegate, NSTextFieldDelegate,
-    NSTextView, NSView, NSWorkspace,
+    NSTextView, NSView, NSWorkspace, NSWorkspaceApplicationKey,
+    NSWorkspaceDidActivateApplicationNotification,
 };
+use objc2_application_services::{AXObserver, AXUIElement};
+use objc2_core_foundation::CFString;
 use objc2_foundation::{
-    NSBundle, NSData, NSIndexSet, NSNotification, NSObject, NSObjectProtocol, NSSize, NSString,
-    NSURL,
+    NSBundle, NSData, NSIndexSet, NSNotification, NSNotificationCenter, NSObject, NSObjectProtocol,
+    NSOperationQueue, NSSize, NSString, NSURL,
 };
 
 use crate::core::search::matching_rows;
-use crate::core::window::{WindowBackend, WindowError, WindowInfo};
-use crate::macos::{accessibility, hotkey, window_backend::MacWindowBackend};
+use crate::core::window::{WindowError, WindowInfo};
+use crate::macos::{
+    accessibility, hotkey, window_backend::MacWindowBackend, window_history::WindowHistory,
+};
 
 use super::panel_view::{HELP, PanelView, install_edit_menu, window_row};
 
@@ -62,11 +70,13 @@ pub fn run() -> Result<(), Box<dyn Error>> {
     })?;
     install_edit_menu(mtm, &app);
     let (requests, rx) = mpsc::channel();
+    let workspace_observer = WorkspaceObserver::install(requests.clone());
     let panel = SearchPanel::new(mtm, requests);
     let status_menu = StatusMenu::install(mtm, &app, &panel.controller)?;
     let worker = thread::Builder::new()
         .name("window-accessibility".into())
         .spawn(move || work(rx))?;
+    panel.observe_frontmost();
     PANEL.with(|slot| slot.replace(Some(Rc::new(panel))));
 
     eprintln!("holod is running. Tap Option twice to search.");
@@ -74,6 +84,7 @@ pub fn run() -> Result<(), Box<dyn Error>> {
 
     drop(status_menu);
     drop(monitors);
+    drop(workspace_observer);
     drop(PANEL.with(|slot| slot.take()));
     if worker.join().is_err() {
         tracing::error!("Window worker exited unexpectedly");
@@ -175,22 +186,104 @@ where
 }
 
 enum Request {
-    List(u64),
+    Observe(i32),
+    List(u64, Option<i32>),
     Focus(u64, String),
+}
+
+struct WorkspaceObserver {
+    center: Retained<NSNotificationCenter>,
+    token: Retained<ProtocolObject<dyn NSObjectProtocol>>,
+}
+
+impl WorkspaceObserver {
+    fn install(requests: Sender<Request>) -> Self {
+        let workspace = NSWorkspace::sharedWorkspace();
+        let center = workspace.notificationCenter();
+        // SAFETY: These immutable AppKit constants identify the notification and its app payload.
+        let (notification_name, app_key) = unsafe {
+            (
+                NSWorkspaceDidActivateApplicationNotification,
+                NSWorkspaceApplicationKey,
+            )
+        };
+        let activate = RcBlock::new(move |notification: NonNull<NSNotification>| {
+            // SAFETY: AppKit provides a live notification for this callback.
+            let notification = unsafe { notification.as_ref() };
+            let app = notification
+                .userInfo()
+                .and_then(|info| info.objectForKey(app_key))
+                .and_then(|app| app.downcast::<NSRunningApplication>().ok());
+            if let Some(pid) = app.as_deref().and_then(user_app_pid) {
+                let _ = requests.send(Request::Observe(pid));
+            }
+        });
+        // SAFETY: The sendable callback is retained by the notification center and queued on main.
+        let token = unsafe {
+            center.addObserverForName_object_queue_usingBlock(
+                Some(notification_name),
+                Some(&workspace),
+                Some(&NSOperationQueue::mainQueue()),
+                &activate,
+            )
+        };
+        Self { center, token }
+    }
+}
+
+impl Drop for WorkspaceObserver {
+    fn drop(&mut self) {
+        // SAFETY: This token was registered with the same notification center.
+        unsafe { self.center.removeObserver(self.token.as_ref()) };
+    }
+}
+
+fn user_app_pid(app: &NSRunningApplication) -> Option<i32> {
+    let pid = app.processIdentifier();
+    (app.activationPolicy() == NSApplicationActivationPolicy::Regular && pid > 0).then_some(pid)
+}
+
+fn frontmost_pid() -> Option<i32> {
+    NSWorkspace::sharedWorkspace()
+        .frontmostApplication()
+        .as_deref()
+        .and_then(user_app_pid)
+}
+
+// SAFETY: The observer source runs on the main run loop and this callback ignores its AX arguments.
+unsafe extern "C-unwind" fn focused_window_changed(
+    _observer: NonNull<AXObserver>,
+    _element: NonNull<AXUIElement>,
+    _notification: NonNull<CFString>,
+    _context: *mut c_void,
+) {
+    with_panel(SearchPanel::observe_frontmost);
 }
 
 fn work(requests: Receiver<Request>) {
     let backend = MacWindowBackend::default();
+    let mut history = WindowHistory::default();
+    if let Err(error) = accessibility::configure_timeout() {
+        tracing::debug!(%error, "Could not set window tracking timeout");
+    }
     for request in requests {
         autoreleasepool(|_| match request {
-            Request::List(generation) => {
-                let result = backend.list_windows();
+            Request::Observe(pid) => {
+                history.observe(pid, Some(focused_window_changed));
+            }
+            Request::List(generation, pid) => {
+                if let Some(pid) = pid {
+                    history.observe(pid, Some(focused_window_changed));
+                }
+                let result = backend.list_for_search(&history);
                 DispatchQueue::main().exec_async(move || {
                     with_panel(|panel| panel.receive_windows(generation, result));
                 });
             }
             Request::Focus(generation, id) => {
-                let result = backend.focus_window(&id);
+                let result = backend
+                    .focus_search_window(&id)
+                    .map(|window| history.record(window));
                 DispatchQueue::main().exec_async(move || {
                     with_panel(|panel| panel.receive_focus(generation, result));
                 });
@@ -275,11 +368,18 @@ impl SearchPanel {
         }
     }
 
+    fn observe_frontmost(&self) {
+        if let Some(pid) = frontmost_pid() {
+            let _ = self.requests.send(Request::Observe(pid));
+        }
+    }
+
     fn open(&self) {
         if self.view.window.isVisible() {
             self.focus_search();
             return;
         }
+        let pid = frontmost_pid();
         let generation = {
             let mut state = self.state.borrow_mut();
             state.generation += 1;
@@ -294,7 +394,7 @@ impl SearchPanel {
         self.view.window.center();
         self.focus_search();
         self.view.window.invalidateShadow();
-        if self.requests.send(Request::List(generation)).is_err() {
+        if self.requests.send(Request::List(generation, pid)).is_err() {
             self.worker_unavailable();
         }
     }
