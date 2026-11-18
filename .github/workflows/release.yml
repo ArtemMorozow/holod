@@ -1,0 +1,74 @@
+name: Release Holod for macOS
+
+"on":
+  push:
+    tags:
+      - 'v[0-9]+.[0-9]+.[0-9]+'
+
+permissions:
+  contents: write
+
+concurrency:
+  group: release-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  release:
+    runs-on: macos-26
+    timeout-minutes: 75
+    env:
+      HOLOD_RELEASE_TAG: ${{ github.ref_name }}
+      RUSTUP_TOOLCHAIN: stable
+    steps:
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+        with:
+          persist-credentials: false
+
+      - name: Validate release settings
+        env:
+          HOLOD_NOTARIZE: ${{ vars.HOLOD_NOTARIZE }}
+        run: |
+          case "$HOLOD_NOTARIZE" in
+            ""|false|true) ;;
+            *) echo 'Set HOLOD_NOTARIZE to true or false.' >&2; exit 1 ;;
+          esac
+          [[ "$(uname -sm)" == "Darwin arm64" ]]
+          rustup toolchain install stable --profile minimal
+          rustup target add aarch64-apple-darwin
+
+      - name: Package with an ad hoc signature
+        if: vars.HOLOD_NOTARIZE != 'true'
+        run: ./packaging/macos/build.sh
+
+      - name: Sign and notarize with Developer ID
+        if: vars.HOLOD_NOTARIZE == 'true'
+        env:
+          HOLOD_SIGN_IDENTITY: ${{ vars.HOLOD_SIGN_IDENTITY }}
+          HOLOD_SIGN_P12_BASE64: ${{ secrets.HOLOD_SIGN_P12_BASE64 }}
+          HOLOD_SIGN_P12_PASSWORD: ${{ secrets.HOLOD_SIGN_P12_PASSWORD }}
+          HOLOD_NOTARY_KEY: ${{ secrets.HOLOD_NOTARY_KEY }}
+          HOLOD_NOTARY_KEY_ID: ${{ secrets.HOLOD_NOTARY_KEY_ID }}
+          HOLOD_NOTARY_ISSUER_ID: ${{ secrets.HOLOD_NOTARY_ISSUER_ID }}
+        run: bash packaging/macos/release.sh
+
+      - name: Publish DMG to GitHub Releases
+        env:
+          GH_TOKEN: ${{ github.token }}
+        shell: bash
+        run: |
+          tag="$HOLOD_RELEASE_TAG"
+          image="dist/holod-${tag#v}-macos-arm64.dmg"
+          test -s "$image"
+
+          if draft=$(gh release view "$tag" --json isDraft --jq .isDraft); then
+            if [[ "$draft" != true ]]; then
+              echo "Release $tag is already published." >&2
+              exit 1
+            fi
+          else
+            notes="Download the DMG below for Apple Silicon (macOS 26 or later). See the README for installation instructions."
+            gh release create "$tag" --verify-tag --draft --title "Holod $tag" --notes "$notes" --generate-notes
+          fi
+
+          gh release upload "$tag" "$image" --clobber
+          gh release edit "$tag" --draft=false

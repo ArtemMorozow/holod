@@ -4,19 +4,19 @@
 
 ## Установка на macOS
 
-1. Откройте `holod-<версия>-macos-arm64.dmg` и перетащите **Holod** в **Программы (Applications)**.
+Требуются Apple Silicon и macOS 26 или новее.
+
+1. Скачайте `holod-<версия>-macos-arm64.dmg` из раздела **Assets** последнего релиза. Откройте образ и перетащите **Holod** в **Программы (Applications)**. [Скачать Holod](https://github.com/ArtemMorozow/holod/releases/latest)
 2. Откройте Holod из «Программ». При первом запуске нажмите **Open System Settings**. В «Конфиденциальность и безопасность → Универсальный доступ» включите Holod. Если его нет в списке, нажмите «+» и выберите `/Applications/Holod.app`.
 3. Снова откройте Holod. Нажмите сочетание вроде `⌃⌥K` или дважды быстро нажмите и отпустите одну клавишу, например `⌘ → ⌘`. Выберите **Save Shortcut**. Кнопка **Skip** оставляет двойное нажатие `Option`.
 4. Если хотите, чтобы Holod открывался при входе в macOS, выберите **Start at Login**. Кнопка **Not Now** закрывает предложение. Позже автозапуск можно включить через **Start at Login** в меню снежинки.
 5. В строке меню появится снежинка с буквой **H**. Откройте панель своим сочетанием или через **Search Windows**. Завершить приложение можно через **Quit Holod** в меню снежинки или `⌘Q` в панели поиска.
 
-Для установленного приложения нужна macOS 26 или новее и Apple Silicon.
+Если macOS блокирует сборку с подписью ad hoc, после попытки запуска откройте «Системные настройки → Конфиденциальность и безопасность» и выберите **Всё равно открыть**, если кнопка доступна и вы доверяете источнику. [Справка Apple](https://support.apple.com/ru-ru/102445)
 
 ## Обновление
 
-Выберите **Quit Holod** в меню снежинки, откройте новый DMG и перетащите Holod в **Программы**. В Finder выберите **Заменить**, затем откройте Holod из «Программ». Если macOS снова запрашивает разрешение после обновления локальной подписи, откройте «Универсальный доступ». При необходимости удалите старую запись Holod, добавьте `/Applications/Holod.app` и снова запустите приложение.
-
-В релизах GitLab CI со Sparkle выберите **Check for Updates…** в меню снежинки. Holod также проверяет обновления в фоне. По умолчанию установка запускается после подтверждения. Первый релиз со Sparkle установите из DMG.
+Скачайте новый DMG из GitHub Releases. Выберите **Quit Holod** в меню снежинки, откройте DMG и перетащите Holod в **Программы**. В Finder выберите **Заменить**, затем откройте Holod из «Программ». Если macOS снова запрашивает разрешение после обновления локальной подписи, откройте «Универсальный доступ». При необходимости удалите старую запись Holod, добавьте `/Applications/Holod.app` и снова запустите приложение.
 
 ## Сборка
 
@@ -34,25 +34,30 @@
 cargo build --release --locked
 ```
 
-## Релизы в GitLab CI
+## Выпуск на GitHub
 
-Пайплайн на Apple Silicon прогоняет проверки Rust и сохраняет локально подписанный DMG в артефактах задания `build_macos`. По умолчанию используется раннер GitLab.com `saas-macos-medium-m1` с macOS 26 и Xcode 26. Для собственного раннера на Apple Silicon с Xcode 26 задайте его тег в переменной `MACOS_RUNNER_TAG`. [Раннеры GitLab на macOS](https://docs.gitlab.com/ci/runners/hosted_runners/macos/)
+При отправке тега `vX.Y.Z` GitHub Actions на раннере `macos-26` (Apple Silicon) собирает `Holod.app`, упаковывает его в DMG и публикует образ в **Assets** релиза. Версия тега должна совпадать с версией пакета `holod` в `Cargo.toml` и `Cargo.lock`. Для публичного репозитория стандартные раннеры GitHub бесплатны. [Раннеры GitHub](https://docs.github.com/en/actions/reference/runners/github-hosted-runners#standard-github-hosted-runners-for-public-repositories)
 
-1. В проекте GitLab защитите теги `v*` и включите GitLab Pages с доступом без входа. Задание `publish_macos` использует `CI_PAGES_URL`. Для своего домена задайте `HOLOD_PAGES_URL` с базовым HTTPS-адресом сайта. Этот адрес встраивается в Holod, поэтому сохраняйте его между релизами. [Доступ к GitLab Pages](https://docs.gitlab.com/user/project/pages/pages_access_control/)
-2. Подготовьте сертификат **Developer ID Application** с закрытым ключом в `.p12`, API-ключ команды App Store Connect для `notarytool` и новый ключ EdDSA из `bin/generate_keys` Sparkle 2.10.0. Создайте отдельный ключ командой `bin/generate_keys --account holod` и экспортируйте его командой `bin/generate_keys --account holod -x <файл>`. Храните резервную копию ключа для последующих релизов. [Нотарификация Apple](https://developer.apple.com/documentation/security/notarizing-macos-software-before-distribution/) · [Ключи Sparkle](https://sparkle-project.org/documentation/)
-3. Добавьте защищённые переменные для окружения `production` в **Settings → CI/CD → Variables**. Секреты задайте как скрытые или маскируемые, где GitLab поддерживает это для их формата.
+Убедитесь, что GitHub Actions включён, и отправьте тег с коммита, в котором есть workflow и нужная версия. Например, для версии 0.1.5:
 
-| Переменная | Тип | Значение |
+```sh
+git tag -a v0.1.5 -m "Holod 0.1.5"
+git push origin v0.1.5
+```
+
+По умолчанию используется подпись ad hoc. Для подписи Developer ID и нотарификации добавьте в **Settings → Secrets and variables → Actions** следующие значения:
+
+| Имя | Тип | Значение |
 | --- | --- | --- |
+| `HOLOD_NOTARIZE` | Variable | `true` |
 | `HOLOD_SIGN_IDENTITY` | Variable | Имя или SHA-1 сертификата Developer ID Application |
-| `HOLOD_SIGN_P12_BASE64` | File | `.p12` в Base64, например вывод `base64 -i DeveloperID.p12` |
-| `HOLOD_SIGN_P12_PASSWORD` | Variable | Пароль экспорта `.p12` |
-| `HOLOD_NOTARY_KEY` | File | Содержимое файла API-ключа `.p8` |
-| `HOLOD_NOTARY_KEY_ID` | Variable | Key ID из App Store Connect |
-| `HOLOD_NOTARY_ISSUER_ID` | Variable | Issuer ID из App Store Connect |
-| `HOLOD_SPARKLE_PRIVATE_KEY` | File | Закрытый ключ, экспортированный `generate_keys -x` |
+| `HOLOD_SIGN_P12_BASE64` | Secret | Сертификат с закрытым ключом в `.p12`, закодированный в Base64 |
+| `HOLOD_SIGN_P12_PASSWORD` | Secret | Пароль экспорта `.p12` |
+| `HOLOD_NOTARY_KEY` | Secret | Полное содержимое файла API-ключа команды Apple `.p8` |
+| `HOLOD_NOTARY_KEY_ID` | Secret | Key ID ключа |
+| `HOLOD_NOTARY_ISSUER_ID` | Secret | Issuer ID ключа |
 
-Поднимите версию в `Cargo.toml` и `Cargo.lock`, затем отправьте защищённый тег с таким же номером, например `v0.1.5`. Задание `publish_macos` подпишет приложение и DMG, отправит DMG на нотарификацию, прикрепит билет Apple и опубликует последнюю версию с подписанным `appcast.xml` на GitLab Pages. После первого выпуска откройте Pages без входа и скачайте DMG. Для сквозной проверки установите его в «Программы», опубликуйте следующий релиз и обновитесь через **Check for Updates…**.
+В этом режиме GitHub Actions загружает подписанный DMG в сервис нотарификации Apple и прикрепляет билет к образу до публикации. [Developer ID](https://developer.apple.com/developer-id/) · [Нотарификация Apple](https://developer.apple.com/documentation/security/notarizing-macos-software-before-distribution)
 
 ## Разрешение macOS
 
@@ -109,3 +114,9 @@ cargo build --release --locked
 12. Откройте VS Code и введите в панели поиска `vs-code`, `мы-сщву`, затем `мы-сжву`. Каждый запрос должен показать окна VS Code. Откройте окно с заголовком «Документ» и проверьте, что его можно найти запросом `ljrevtyn`.
 13. Запустите установленный Holod с чистыми настройками и выберите **Not Now** в предложении об автозапуске. Перезапустите приложение и убедитесь, что предложение больше не появляется. Включите **Start at Login** через меню снежинки и проверьте наличие Holod в объектах входа macOS. Если требуется подтверждение, завершите его в «Системных настройках». Выйдите из учётной записи и войдите снова, чтобы проверить запуск.
 14. Повторите проверку с чистыми настройками, выбрав **Start at Login** при первом запуске. Когда автозапуск включён, у пункта **Start at Login** должна появиться галочка. Удалите Holod из объектов входа в «Системных настройках» и проверьте, что пункт снова позволяет включить автозапуск.
+
+## Вклад и лицензия
+
+Для сообщений об ошибках и предложений используйте [GitHub Issues](https://github.com/ArtemMorozow/holod/issues). Если ошибка связана с переключением окон, укажите версию macOS, версию Holod и шаги воспроизведения. Изменения можно предложить через pull request.
+
+Holod распространяется по [лицензии MIT](LICENSE).

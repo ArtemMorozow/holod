@@ -16,7 +16,7 @@ mkdir -p "$output"
 metadata=$(cargo metadata --locked --no-deps --format-version 1)
 version=$(printf '%s' "$metadata" | plutil -extract packages.0.version raw -o - -)
 app_name=$(plutil -extract CFBundleName raw -o - "$info_plist")
-if [[ -n ${CI_COMMIT_TAG:-} && "$CI_COMMIT_TAG" != "v$version" ]]; then
+if [[ -n ${HOLOD_RELEASE_TAG:-} && "$HOLOD_RELEASE_TAG" != "v$version" ]]; then
     printf 'The release tag must be v%s.\n' "$version" >&2
     exit 1
 fi
@@ -55,6 +55,9 @@ iconset="$stage/holod.iconset"
 mkdir -p "$app/Contents/MacOS" "$app/Contents/Resources" "$iconset"
 install -m 0755 "$target/aarch64-apple-darwin/release/holod" "$app/Contents/MacOS/holod"
 install -m 0644 "$info_plist" "$app/Contents/Info.plist"
+install -m 0644 "$root/LICENSE" "$app/Contents/Resources/LICENSE.txt"
+cargo metadata --locked --filter-platform aarch64-apple-darwin --format-version 1 \
+    | python3 "$root/packaging/macos/dependency-notices.py" "$app/Contents/Resources/ThirdPartyNotices.txt"
 
 app_plist="$app/Contents/Info.plist"
 if [[ -n ${HOLOD_SPARKLE_DIR:-} ]]; then
